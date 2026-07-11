@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Gemini Tag - WebXR</title>
+    <meta name="description" content="Gorilla Tag Locomotion in WebXR">
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
+  </head>
+  <body>
+
+    <script>
+      // Gorilla Tag style physics component
+      AFRAME.registerComponent('gorilla-locomotion', {
+        schema: {
+          hand: {type: 'string', default: 'left'},
+          pushStrength: {type: 'number', default: 3.5},
+          gravity: {type: 'number', default: -9.8}
+        },
+
+        init: function () {
+          this.playerEl = document.querySelector('#player');
+          this.prevPosition = new THREE.Vector3();
+          this.controllerVelocity = new THREE.Vector3();
+          this.isPlaying = false;
+          
+          // Physics state for the player
+          if (!this.playerEl.userData.velocity) {
+            this.playerEl.userData.velocity = new THREE.Vector3(0, 0, 0);
+            this.playerEl.userData.isGrounded = false;
+          }
+
+          // Track controller trigger or grip to "grab" the air/ground
+          this.el.addEventListener('triggerdown', () => { this.isPlaying = true; });
+          this.el.addEventListener('triggerup', () => { this.isPlaying = false; });
+          this.el.addEventListener('gripdown', () => { this.isPlaying = true; });
+          this.el.addEventListener('gripup', () => { this.isPlaying = false; });
+        },
+
+        tick: function (time, timeDelta) {
+          if (!timeDelta) return;
+          
+          let currentPosition = new THREE.Vector3();
+          this.el.object3D.getWorldPosition(currentPosition);
+
+          // Calculate controller velocity relative to the world
+          let dt = timeDelta / 1000;
+          this.controllerVelocity.subVectors(currentPosition, this.prevPosition).divideScalar(dt);
+          this.prevPosition.copy(currentPosition);
+
+          let playerVel = this.playerEl.userData.velocity;
+
+          // If holding trigger/grip, push the player in the opposite direction of hand movement
+          if (this.isPlaying) {
+            // Reverse the hand movement vector to push away
+            let pushVector = this.controllerVelocity.clone().multiplyScalar(-this.data.pushStrength * 0.3);
+            
+            // Apply forces
+            playerVel.x = pushVector.x;
+            playerVel.z = pushVector.z;
+            
+            // Only allow upward pushing if close to the ground floor
+            if (this.playerEl.object3D.position.y <= 0.1 || this.playerEl.userData.isGrounded) {
+              playerVel.y = Math.max(pushVector.y, 0); 
+            }
+          }
+        }
+      });
+
+      // Global physics loop manager for player gravity and floor collision
+      AFRAME.registerComponent('player-physics', {
+        init: function () {
+          this.velocity = this.el.userData.velocity = new THREE.Vector3(0, 0, 0);
+        },
+        tick: function (time, timeDelta) {
+          if (!timeDelta) return;
+          let dt = timeDelta / 1000;
+          let pos = this.el.object3D.position;
+
+          // Apply Gravity if above ground
+          if (pos.y > 0) {
+            this.velocity.y += -9.8 * dt;
+            this.el.userData.isGrounded = false;
+          }
+
+          // Apply velocity to position
+          pos.addScaledVector(this.velocity, dt);
+
+          // Floor Collision (Keep player above ground level)
+          if (pos.y <= 0) {
+            pos.y = 0;
+            this.velocity.y = 0;
+            // Apply friction/damping on ground
+            this.velocity.x *= 0.85;
+            this.velocity.z *= 0.85;
+            this.el.userData.isGrounded = true;
+          }
+        }
+      });
+
+      // Simple game logic for tagging targets
+      AFRAME.registerComponent('tag-target', {
+        init: function () {
+          this.el.addEventListener('collidestart', (e) => {
+            // Change color randomly when tagged
+            const randomColor = '#' + Math.floor(Math.random()*16777215).toString(16);
+            this.el.setAttribute('material', 'color', randomColor);
+            
+            // Play a soft haptic bump if available
+            let hands = document.querySelectorAll('[gorilla-locomotion]');
+            hands.forEach(hand => {
+              if (hand.components['tracked-controls'] && hand.components['tracked-controls'].controller) {
+                let gamepad = hand.components['tracked-controls'].controller.gamepad;
+                if (gamepad && gamepad.hapticActuators && gamepad.hapticActuators[0]) {
+                  gamepad.hapticActuators[0].pulse(0.6, 100);
+                }
+              }
+            });
+          });
+        }
+      });
+    </script>
+
+    <a-scene physics="debug: false; gravity: 0;">
+      
+      <a-assets>
+        <a-mixin id="hand" 
+                 physics-collider
+                 geometry="primitive: sphere; radius: 0.1" 
+                 material="color: #ff3366; roughness: 0.5">
+        </a-mixin>
+      </a-assets>
+
+      <a-sky color="#87CEEB"></a-sky>
+      <a-plane position="0 0 0" rotation="-90 0 0" width="100" height="100" color="#228B22" static-body></a-plane>
+
+      <a-box position="-5 2 -5" width="2" height="4" depth="2" color="#4A4A4A" static-body tag-target></a-box>
+      <a-box position="5 3 -8" width="3" height="6" depth="3" color="#4A4A4A" static-body tag-target></a-box>
+      <a-box position="0 1.5 -12" width="4" height="3" depth="4" color="#4A4A4A" static-body tag-target></a-box>
+      <a-cylinder position="6 2 4" radius="1.5" height="4" color="#7A7A7A" static-body tag-target></a-cylinder>
+      <a-cylinder position="-6 2 6" radius="1.2" height="4" color="#7A7A7A" static-body tag-target></a-cylinder>
+
+      <a-box position="0 5 -20" width="4" height="10" depth="4" color="#111" static-body>
+        <a-text value="GEMINI TAG" align="center" color="#00ffff" position="0 4 2.1" scale="4 4 4"></a-text>
+        <a-text value="Grab & Slap surfaces to move!" align="center" color="#fff" position="0 2 2.1" scale="1.5 1.5 1.5"></a-text>
+      </a-box>
+
+      <a-entity id="player" position="0 0 0" player-physics>
+        <a-entity camera position="0 1.6 0" look-controls></a-entity>
+        
+        <a-entity id="leftHand" 
+                  laser-controls="hand: left"
+                  tracked-controls="hand: left"
+                  mixin="hand"
+                  gorilla-locomotion="hand: left">
+        </a-entity>
+        
+        <a-entity id="rightHand" 
+                  laser-controls="hand: right"
+                  tracked-controls="hand: right"
+                  mixin="hand"
+                  gorilla-locomotion="hand: right">
+        </a-entity>
+      </a-entity>
+
+    </a-scene>
+  </body>
+</html>
